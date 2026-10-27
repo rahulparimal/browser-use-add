@@ -68,6 +68,8 @@ from browser_use.config import CONFIG
 from browser_use.dom.views import DOMInteractedElement, MatchLevel
 from browser_use.filesystem.file_system import FileSystem
 from browser_use.observability import observe, observe_debug
+from browser_use.screenshots.optimizer import ImageOptimizer, ImageOptimizerSettings
+from browser_use.skills.local import LocalSkill, LocalSkillStore
 from browser_use.telemetry.service import ProductTelemetry
 from browser_use.telemetry.views import AgentTelemetryEvent
 from browser_use.tools.registry.views import ActionModel
@@ -205,6 +207,8 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		loop_detection_window: int = 20,
 		loop_detection_enabled: bool = True,
 		llm_screenshot_size: tuple[int, int] | None = None,
+		image_optimizer: ImageOptimizerSettings | bool | None = None,
+		record_skill: str | None = None,
 		message_compaction: MessageCompactionSettings | bool | None = True,
 		max_clickable_elements_length: int = 40000,
 		_url_shortening_limit: int = 25,
@@ -489,6 +493,21 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			f'{" +file_system" if self.file_system else ""}'
 		)
 
+		self.record_skill = record_skill  # auto-save a successful run as a local skill under this name
+
+		# Token-aware screenshot pipeline (model-sized box, lossy encode, optional unchanged-frame skipping)
+		self.image_optimizer: ImageOptimizer | None = None
+		if image_optimizer:
+			opt_settings = (
+				image_optimizer
+				if isinstance(image_optimizer, ImageOptimizerSettings)
+				else ImageOptimizerSettings.for_model(getattr(self.llm, 'model', ''))
+			)
+			self.image_optimizer = ImageOptimizer(opt_settings)
+			self.logger.info(
+				f'🖼️  Image optimizer: ≤{opt_settings.max_width}x{opt_settings.max_height} {opt_settings.format}@{opt_settings.quality}'
+			)
+
 		# Store llm_screenshot_size in browser_session so tools can access it
 		self.browser_session.llm_screenshot_size = llm_screenshot_size
 
@@ -527,6 +546,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			sample_images=self.sample_images,
 			llm_screenshot_size=llm_screenshot_size,
 			max_clickable_elements_length=self.settings.max_clickable_elements_length,
+			image_optimizer=self.image_optimizer,
 		)
 
 		if self.sensitive_data:
@@ -2703,6 +2723,12 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			# Emit UpdateAgentTaskEvent at the END of run() with final task state
 			self.eventbus.dispatch(UpdateAgentTaskEvent.from_agent(self))
 
+			if self.record_skill:
+				try:
+					self.save_as_skill(self.record_skill, overwrite=True)
+				except Exception as skill_e:
+					self.logger.warning(f'Could not record skill {self.record_skill!r}: {skill_e}')
+
 			# Generate GIF if needed before stopping event bus
 			if self.settings.generate_gif:
 				output_path: str = 'agent_history.gif'
@@ -3910,6 +3936,23 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			history = self._substitute_variables_in_history(history, variables)
 
 		return await self.rerun_history(history, **kwargs)
+
+	def save_as_skill(
+		self,
+		name: str,
+		description: str | None = None,
+		store: LocalSkillStore | None = None,
+		overwrite: bool = False,
+	) -> LocalSkill:
+		"""Save this (successfully completed) run as a reusable local skill; replay with `LocalSkillStore.run`."""
+		return (store or LocalSkillStore()).save(
+			name,
+			self.history,
+			task=self.task,
+			description=description,
+			sensitive_data=self.sensitive_data,
+			overwrite=overwrite,
+		)
 
 	def save_history(self, file_path: str | Path | None = None) -> None:
 		"""Save the history to a file with sensitive data filtering"""

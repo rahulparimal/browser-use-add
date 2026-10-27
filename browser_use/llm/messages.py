@@ -29,6 +29,8 @@ def _format_image_url(url: str, max_length: int = 50) -> str:
 class ContentPartTextParam(BaseModel):
 	text: str
 	type: Literal['text'] = 'text'
+	cache: bool = False
+	"""Mark a prompt-cache breakpoint after this part (Anthropic only; ignored elsewhere)."""
 
 	def __str__(self) -> str:
 		return f'Text: {_truncate(self.text)}'

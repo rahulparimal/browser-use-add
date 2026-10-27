@@ -102,7 +102,7 @@ class AnthropicMessageSerializer:
 			is_last = i == len(content) - 1
 			if part.type == 'text':
 				serialized_blocks.append(
-					AnthropicMessageSerializer._serialize_content_part_text(part, use_cache=use_cache and is_last)
+					AnthropicMessageSerializer._serialize_content_part_text(part, use_cache=part.cache or (use_cache and is_last))
 				)
 
 		return serialized_blocks
@@ -124,7 +124,7 @@ class AnthropicMessageSerializer:
 			is_last = i == len(content) - 1
 			if part.type == 'text':
 				serialized_blocks.append(
-					AnthropicMessageSerializer._serialize_content_part_text(part, use_cache=use_cache and is_last)
+					AnthropicMessageSerializer._serialize_content_part_text(part, use_cache=part.cache or (use_cache and is_last))
 				)
 			elif part.type == 'image_url':
 				serialized_blocks.append(AnthropicMessageSerializer._serialize_content_part_image(part))

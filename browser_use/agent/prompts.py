@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 	from browser_use.agent.views import AgentStepInfo
 	from browser_use.browser.views import BrowserStateSummary
 	from browser_use.filesystem.file_system import FileSystem
+	from browser_use.screenshots.optimizer import ImageOptimizer
 
 
 def _is_anthropic_4_5_model(model_name: str | None) -> bool:
@@ -109,6 +110,7 @@ class AgentMessagePrompt:
 		browser_state_summary: 'BrowserStateSummary',
 		file_system: 'FileSystem',
 		agent_history_description: str | None = None,
+		agent_history_parts: list[str] | None = None,
 		read_state_description: str | None = None,
 		task: str | None = None,
 		include_attributes: list[str] | None = None,
@@ -125,10 +127,13 @@ class AgentMessagePrompt:
 		llm_screenshot_size: tuple[int, int] | None = None,
 		unavailable_skills_info: str | None = None,
 		plan_description: str | None = None,
+		image_optimizer: 'ImageOptimizer | None' = None,
 	):
+		self.image_optimizer = image_optimizer
 		self.browser_state: 'BrowserStateSummary' = browser_state_summary
 		self.file_system: 'FileSystem | None' = file_system
 		self.agent_history_description: str | None = agent_history_description
+		self.agent_history_parts = agent_history_parts
 		self.read_state_description: str | None = read_state_description
 		self.task: str | None = task
 		self.include_attributes = include_attributes
@@ -407,13 +412,24 @@ Available tabs:
 		if is_new_tab_page(self.browser_state.url):
 			use_vision = False
 
-		# Build complete state description
-		state_description = (
-			self._get_user_request_description()
-			+ '<agent_history>\n'
-			+ (self.agent_history_description.strip('\n') if self.agent_history_description else '')
-			+ '\n</agent_history>\n\n'
-		)
+		# Build complete state description. Layout is ordered stable -> volatile so providers with prefix
+		# caching can reuse everything up to the end of the (append-only) history:
+		#   [task + history chunks]  <- cache breakpoint after the last chunk
+		#   [agent_state, browser_state, read_state, step meta]  <- changes every step
+		head = self._get_user_request_description() + '<agent_history>\n'
+		if self.agent_history_parts:
+			history_chunks = [
+				ContentPartTextParam(text=('\n' if i else '') + chunk) for i, chunk in enumerate(self.agent_history_parts)
+			]
+			history_chunks[-1].cache = True
+			history_chunks[0].text = head + history_chunks[0].text
+			volatile_prefix = '\n</agent_history>\n\n'
+		else:
+			history_chunks = []
+			volatile_prefix = (
+				self.agent_history_description.strip('\n') if self.agent_history_description else ''
+			) + '\n</agent_history>\n\n'
+		state_description = volatile_prefix if history_chunks else head + volatile_prefix
 		state_description += '<agent_state>\n' + self._get_agent_state_description().strip('\n') + '\n</agent_state>\n'
 		state_description += '<browser_state>\n' + self._get_browser_state_description().strip('\n') + '\n</browser_state>\n'
 		# Only add read_state if it has content
@@ -436,6 +452,11 @@ Available tabs:
 
 		# Sanitize surrogates from all text content
 		state_description = sanitize_surrogates(state_description)
+		for chunk in history_chunks:
+			chunk.text = sanitize_surrogates(chunk.text)
+		# With per-part breakpoints the message-level flag would cache the volatile tail for nothing
+		# (a cache write costs 1.25x and this tail never gets read back).
+		message_cache = not history_chunks
 
 		# Check if we have images to include (from read_file action)
 		has_images = bool(self.read_state_images)
@@ -443,7 +464,10 @@ Available tabs:
 
 		if (use_vision is True and screenshots) or has_images:
 			# Start with text description
-			content_parts: list[ContentPartTextParam | ContentPartImageParam] = [ContentPartTextParam(text=state_description)]
+			content_parts: list[ContentPartTextParam | ContentPartImageParam] = [
+				*history_chunks,
+				ContentPartTextParam(text=state_description),
+			]
 
 			# Add sample images
 			content_parts.extend(self.sample_images)
@@ -458,6 +482,24 @@ Available tabs:
 
 				# Add label as text content
 				content_parts.append(ContentPartTextParam(text=label))
+
+				if self.image_optimizer is not None:
+					optimized = self.image_optimizer.optimize(screenshot)
+					if optimized.unchanged:
+						content_parts[-1] = ContentPartTextParam(
+							text='Current screenshot: unchanged from previous step (omitted to save tokens; rely on browser_state).'
+						)
+						continue
+					content_parts.append(
+						ContentPartImageParam(
+							image_url=ImageURL(
+								url=optimized.data_url,
+								media_type=optimized.media_type,
+								detail=self.vision_detail_level,
+							),
+						)
+					)
+					continue
 
 				# Resize screenshot if llm_screenshot_size is configured
 				processed_screenshot = self._resize_screenshot(screenshot)
@@ -501,8 +543,10 @@ Available tabs:
 					)
 				)
 
-			return UserMessage(content=content_parts, cache=True)
+			return UserMessage(content=content_parts, cache=message_cache)
 
+		if history_chunks:
+			return UserMessage(content=[*history_chunks, ContentPartTextParam(text=state_description)], cache=False)
 		return UserMessage(content=state_description, cache=True)
 
 

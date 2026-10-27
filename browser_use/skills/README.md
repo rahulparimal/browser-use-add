@@ -31,3 +31,30 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## Local skills (record once, replay without an LLM)
+
+```python
+from browser_use import Agent
+from browser_use.skills import LocalSkillStore
+
+# Record: a successful run is saved under <BROWSER_USE_CONFIG_DIR>/local_skills/<name>/ (default ~/.config/browseruse) (history.json + SKILL.md)
+agent = Agent(task='Log in to the demo site', llm=llm, record_skill='demo-login')
+await agent.run()
+
+# Find by intent, then replay with new values for the detected parameters (see SKILL.md / skill.parameters)
+store = LocalSkillStore()
+skill, score = store.find('sign in to demo')[0]
+await store.run(skill.name, llm=llm, variables={'email': 'other@example.com'})
+```
+
+Replay re-resolves elements against the live DOM and only calls the LLM for fallback AI steps and the final
+summary. Secrets passed via `sensitive_data` are redacted in `history.json` and `SKILL.md`.
+
+## Token efficiency knobs
+
+- `Agent(image_optimizer=True)` (or an `ImageOptimizerSettings`) fits screenshots into a per-provider box,
+  encodes them lossy when that is smaller, memoizes by content, and with `skip_unchanged=True` omits frames
+  that are perceptually identical to the previous one.
+- The state message is laid out stable -> volatile with an Anthropic cache breakpoint after the append-only
+  history, so each step reads the previous step's prefix from cache instead of re-billing it.

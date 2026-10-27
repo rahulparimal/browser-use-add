@@ -25,6 +25,7 @@ from browser_use.llm.messages import (
 	UserMessage,
 )
 from browser_use.observability import observe_debug
+from browser_use.screenshots.optimizer import ImageOptimizer
 from browser_use.utils import (
 	collect_sensitive_data_values,
 	match_url_with_domain_pattern,
@@ -120,7 +121,9 @@ class MessageManager:
 		sample_images: list[ContentPartTextParam | ContentPartImageParam] | None = None,
 		llm_screenshot_size: tuple[int, int] | None = None,
 		max_clickable_elements_length: int = 40000,
+		image_optimizer: ImageOptimizer | None = None,
 	):
+		self.image_optimizer = image_optimizer
 		self.task = task
 		# A fresh state per instance: a mutable default (MessageManagerState()) would be
 		# evaluated once at definition time and shared across every MessageManager created
@@ -149,9 +152,8 @@ class MessageManager:
 		if len(self.state.history.get_messages()) == 0:
 			self._set_message_with_type(self.system_prompt, 'system')
 
-	@property
-	def agent_history_description(self) -> str:
-		"""Build agent history description from list of items, respecting max_history_items limit"""
+	def _history_prefix_and_items(self) -> tuple[str, list[str]]:
+		"""Compacted-memory prefix plus the rendered history items, respecting max_history_items."""
 		compacted_prefix = ''
 		if self.state.compacted_memory:
 			compacted_prefix = (
@@ -162,31 +164,30 @@ class MessageManager:
 				'</compacted_memory>\n'
 			)
 
-		if self.max_history_items is None:
-			# Include all items
-			return compacted_prefix + '\n'.join(item.to_string() for item in self.state.agent_history_items)
-
-		total_items = len(self.state.agent_history_items)
-
-		# If we have fewer items than the limit, just return all items
-		if total_items <= self.max_history_items:
-			return compacted_prefix + '\n'.join(item.to_string() for item in self.state.agent_history_items)
-
-		# We have more items than the limit, so we need to omit some
-		omitted_count = total_items - self.max_history_items
+		items = self.state.agent_history_items
+		if self.max_history_items is None or len(items) <= self.max_history_items:
+			return compacted_prefix, [item.to_string() for item in items]
 
 		# Show first item + omitted message + most recent (max_history_items - 1) items
 		# The omitted message doesn't count against the limit, only real history items do
+		omitted_count = len(items) - self.max_history_items
 		recent_items_count = self.max_history_items - 1  # -1 for first item
+		rendered = [items[0].to_string(), f'<sys>[... {omitted_count} previous steps omitted...]</sys>']
+		rendered.extend(item.to_string() for item in items[-recent_items_count:])
+		return compacted_prefix, rendered
 
-		items_to_include = [
-			self.state.agent_history_items[0].to_string(),  # Keep first item (initialization)
-			f'<sys>[... {omitted_count} previous steps omitted...]</sys>',
-		]
-		# Add most recent items
-		items_to_include.extend([item.to_string() for item in self.state.agent_history_items[-recent_items_count:]])
+	@property
+	def agent_history_description(self) -> str:
+		"""Build agent history description from list of items, respecting max_history_items limit"""
+		prefix, rendered = self._history_prefix_and_items()
+		return prefix + '\n'.join(rendered)
 
-		return compacted_prefix + '\n'.join(items_to_include)
+	@property
+	def agent_history_parts(self) -> list[str]:
+		"""History as append-only chunks (prefix first). Steady-state steps only append, so each chunk
+		boundary is a stable prompt-cache prefix; see AgentMessagePrompt."""
+		prefix, rendered = self._history_prefix_and_items()
+		return ([prefix] if prefix else []) + rendered
 
 	def add_new_task(self, new_task: str) -> None:
 		new_task = '<follow_up_user_request> ' + new_task.strip() + ' </follow_up_user_request>'
@@ -483,6 +484,8 @@ class MessageManager:
 			browser_state_summary=browser_state_summary,
 			file_system=self.file_system,
 			agent_history_description=self.agent_history_description,
+			agent_history_parts=self.agent_history_parts,
+			image_optimizer=self.image_optimizer,
 			read_state_description=self.state.read_state_description,
 			task=self.task,
 			include_attributes=self.include_attributes,
