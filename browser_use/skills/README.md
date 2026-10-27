@@ -58,3 +58,17 @@ summary. Secrets passed via `sensitive_data` are redacted in `history.json` and 
   that are perceptually identical to the previous one.
 - The state message is laid out stable -> volatile with an Anthropic cache breakpoint after the append-only
   history, so each step reads the previous step's prefix from cache instead of re-billing it.
+
+## `bu-agent` command
+
+```bash
+uv tool install .          # from a checkout; puts `bu-agent` on your PATH
+export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY / GOOGLE_API_KEY (auto-detected), or --model provider:model
+
+bu-agent run "find the cheapest laptop on example.com" --save-skill laptop-price
+bu-agent skills list | find "laptop" | show laptop-price | delete laptop-price
+bu-agent skills run laptop-price --set email=other@example.com
+```
+
+`run` enables the image optimizer by default (`--no-optimize-images`, `--skip-unchanged`, `--no-vision` to tune).
+The separate `browser-use` / `bu` command is the Browser Harness CLI and is unchanged.

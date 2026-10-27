@@ -236,3 +236,52 @@ def event_collector():
 			self.event_order.clear()
 
 	return EventCollector()
+
+
+# region - shared recorded-history builder (used by skill/CLI tests)
+from browser_use.agent.views import ActionResult, AgentHistory, AgentHistoryList
+from browser_use.browser.views import BrowserStateHistory
+from browser_use.dom.views import DOMInteractedElement, NodeType
+
+
+def _history(success: bool = True) -> AgentHistoryList:
+	tools = Tools()
+	ActionModel = tools.registry.create_action_model()
+	output_model = AgentOutput.type_with_custom_actions(ActionModel)
+	email_input = DOMInteractedElement(
+		node_id=1,
+		backend_node_id=1,
+		frame_id='f',
+		node_type=NodeType.ELEMENT_NODE,
+		node_value='',
+		node_name='input',
+		attributes={'type': 'email', 'id': 'email'},
+		bounds=None,
+		x_path='//*[@id="email"]',
+		element_hash=1,
+	)
+
+	def item(action: dict, result: ActionResult, element=None) -> AgentHistory:
+		return AgentHistory(
+			model_output=output_model(action=[ActionModel(**action)]),
+			result=[result],
+			state=BrowserStateHistory(
+				url='http://x.test', title='t', tabs=[], interacted_element=[element], screenshot_path=None
+			),
+		)
+
+	return AgentHistoryList(
+		history=[
+			item({'navigate': {'url': 'http://x.test/login', 'new_tab': False}}, ActionResult()),
+			item({'input': {'index': 1, 'text': 'me@example.com', 'clear': True}}, ActionResult(), email_input),
+			item({'done': {'text': 'logged in', 'success': success}}, ActionResult(is_done=True, success=success)),
+		]
+	)
+
+
+@pytest.fixture
+def make_history():
+	return _history
+
+
+# endregion
