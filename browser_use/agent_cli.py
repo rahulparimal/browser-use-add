@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,11 @@ _PROVIDERS = [
 	('OPENAI_API_KEY', 'openai', 'gpt-4o'),
 	('GOOGLE_API_KEY', 'google', 'gemini-2.5-flash'),
 ]
+
+
+def _openai_rejects_sampling_params(model: str) -> bool:
+	m = re.match(r'(?:gpt-(\d+)|o(\d+))', model.lower())
+	return bool(m) and (m.group(2) is not None or int(m.group(1)) >= 5)
 
 
 def resolve_llm(model: str | None) -> BaseChatModel:
@@ -46,6 +52,9 @@ def resolve_llm(model: str | None) -> BaseChatModel:
 	if provider == 'openai':
 		from browser_use.llm.openai.chat import ChatOpenAI
 
+		# GPT-5+ and o-series models only accept the default sampling settings (a 400 otherwise)
+		if _openai_rejects_sampling_params(name):
+			return ChatOpenAI(model=name, temperature=None, frequency_penalty=None)
 		return ChatOpenAI(model=name)
 	from browser_use.llm.google.chat import ChatGoogle
 

@@ -47,3 +47,13 @@ def test_skills_list_find_show_delete(tmp_path, monkeypatch, capsys, make_histor
 	assert LocalSkillStore().list() == []
 	with pytest.raises(SystemExit, match='not found'):
 		main(['skills', 'show', 'invoice-export'])
+
+
+def test_newer_openai_models_get_no_sampling_params(monkeypatch):
+	monkeypatch.setenv('OPENAI_API_KEY', 'sk-test')
+	for name in ['gpt-6-luna', 'gpt-5.6-luna', 'gpt-5', 'o3', 'o4-mini']:
+		llm = resolve_llm(f'openai:{name}')
+		assert llm.temperature is None and llm.frequency_penalty is None, name
+	for name in ['gpt-4o', 'gpt-4.1-mini']:
+		llm = resolve_llm(f'openai:{name}')
+		assert llm.temperature == 0.2 and llm.frequency_penalty == 0.3, name
