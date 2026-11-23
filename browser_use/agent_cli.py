@@ -70,7 +70,7 @@ def resolve_llm(model: str | None) -> BaseChatModel:
 
 
 def build_parser() -> argparse.ArgumentParser:
-	p = argparse.ArgumentParser(prog='bu-agent', description='Token-efficient browser agent with replayable skills.')
+	p = argparse.ArgumentParser(prog='intelli', description='Token-efficient browser agent with replayable skills.')
 	sub = p.add_subparsers(dest='cmd', required=True)
 
 	run = sub.add_parser('run', help='run a task with the agent')

@@ -1,307 +1,153 @@
-<!-- mcp-name: com.browser-use/browser-use -->
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/2ccdb752-22fb-41c7-8948-857fc1ad7e24">
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/774a46d5-27a0-490c-b7d0-e65fcbbfa358">
-  <img alt="Shows a black Browser Use Logo in light color mode and a white one in dark color mode." src="https://github.com/user-attachments/assets/2ccdb752-22fb-41c7-8948-857fc1ad7e24"  width="full">
+  <source media="(prefers-color-scheme: dark)" srcset="static/intelli-browser-os-dark.svg">
+  <img alt="Intelli Browser OS" src="static/intelli-browser-os-light.svg" width="100%">
 </picture>
 
-<div align="center">
-    <picture>
-    <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/9955dda9-ede3-4971-8ee0-91cbc3850125">
-    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/6797d09b-8ac3-4cb9-ba07-b289e080765a">
-    <img alt="The AI browser agent." src="https://github.com/user-attachments/assets/9955dda9-ede3-4971-8ee0-91cbc3850125"  width="400">
-    </picture>
-</div>
+# Intelli Browser OS
 
-<div align="center">
-<a href="https://cloud.browser-use.com?utm_source=github&utm_medium=readme-badge-downloads"><img src="https://media.browser-use.tools/badges/package" height="48" alt="Browser-Use Package Download Statistics"></a>
-</div>
+A browser agent that completes web tasks from plain English while spending as few LLM tokens as it can, keeping
+your confidential data off the cloud model, and turning any successful run into a skill you can replay later.
+
+Built on the open-source [browser-use](https://github.com/browser-use/browser-use) library (MIT). See
+[Credits](#credits-and-license) and the original README in [`docs/`](docs/upstream-browser-use-README.md).
+
+```bash
+intelli run "open news.ycombinator.com and tell me the top story" --save-skill hn-top
+intelli skills run hn-top            # replay without the LLM-driven loop
+```
+(`intelli` and `bu-agent` are the same command.)
 
 ---
 
-<div align="center">
-<a href="#what-can-browser-use-do"><img src="https://media.browser-use.tools/badges/demos" alt="Demos"></a>
-<img width="16" height="1" alt="">
-<a href="https://docs.browser-use.com"><img src="https://media.browser-use.tools/badges/docs" alt="Docs"></a>
-<img width="16" height="1" alt="">
-<a href="https://browser-use.com/posts"><img src="https://media.browser-use.tools/badges/blog" alt="Blog"></a>
-<img width="16" height="1" alt="">
-<a href="https://browsermerch.com"><img src="https://media.browser-use.tools/badges/merch" alt="Merch"></a>
-<img width="100" height="1" alt="">
-<a href="https://github.com/browser-use/browser-use"><img src="https://media.browser-use.tools/badges/github" alt="Github Stars"></a>
-<img width="4" height="1" alt="">
-<a href="https://x.com/intent/user?screen_name=browser_use"><img src="https://media.browser-use.tools/badges/twitter" alt="Twitter"></a>
-<img width="4" height="1" alt="">
-<a href="https://link.browser-use.com/discord"><img src="https://media.browser-use.tools/badges/discord" alt="Discord"></a>
-<img width="4" height="1" alt="">
-<a href="https://cloud.browser-use.com?utm_source=github&utm_medium=readme-badge-cloud"><img src="https://media.browser-use.tools/badges/cloud" height="48" alt="Browser-Use Cloud"></a>
-</div>
+## Why this exists
 
-</br>
+Browser agents are expensive in three ways: tokens (every step re-sends a large page and often a screenshot), trust
+(passwords and personal data pass through a cloud model), and repetition (the same task is re-planned from scratch
+every time). Intelli Browser OS attacks each one directly.
 
-# What can Browser Use do?
+| Problem | What it does | Where |
+|---|---|---|
+| **Screenshot tokens** | Fits each screenshot into a per-provider size box, keeps the smaller of JPEG/PNG, memoizes by content, can skip frames identical to the last one, and can drop screenshots entirely (`--vision off`) or send them only on request (`--vision auto`). | `browser_use/screenshots/optimizer.py` |
+| **Wrong cost estimates** | `intelli calibrate --model X` measures what a model *actually* charges for an image (3 tiny API calls) and stores the fit, instead of trusting a published formula that may be stale for newer models. | `browser_use/screenshots/calibration.py` |
+| **Repeated prompt cost** | The per-step prompt is ordered stable → volatile with an Anthropic cache breakpoint after the append-only history, so each step re-reads the previous step's prefix from cache rather than paying for it again. | `browser_use/agent/prompts.py` |
+| **Confidential data** | An encrypted local vault (SQLite + Fernet). The cloud LLM only sees `<secret>password</secret>`; the real value is substituted locally, only on matching domains. | `browser_use/vault.py` |
+| **Cloud exposure of private pages** | A privacy router sends a step to a **local** model (e.g. Ollama) when the page matches a vault domain or contains an email, valid card number or SSN-shaped number; everything else goes to the cloud model. It fails closed. | `browser_use/llm/router.py` |
+| **Repeating work** | Save a successful run as a skill (`--save-skill`), find it by intent, and replay it with new parameter values. Replay re-resolves elements on the live page and only calls an LLM for fallback steps and the summary. Secrets are redacted in the saved files. | `browser_use/skills/local.py` |
 
-Browser Use lets an AI agent use a web browser the same way humans do — it opens pages, clicks buttons, types, and fills in forms. You describe the task, and it completes it. For example, you can have it:
+## Quick start
 
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
-### 📋 Fill Forms
-#### Task: "Fill in this job application with my resume and information."
+```bash
+git clone https://github.com/rahulparimal/browser-use-add && cd browser-use-add
+uv tool install -e . --python 3.12
+uvx playwright install chromium          # once, unless Chrome is already installed
+export OPENAI_API_KEY=...                # or ANTHROPIC_API_KEY / GOOGLE_API_KEY
 
-![Job Application Demo](https://github.com/user-attachments/assets/57611d8e-0474-4de6-84b7-37a0c0cd27e7)
+intelli run "open news.ycombinator.com and tell me the top story" --model openai:gpt-4o
+```
 
-[Example code ↗](https://github.com/browser-use/browser-use/blob/main/examples/use-cases/apply_to_job.py)
+The provider is auto-detected from whichever key is set; override with `--model provider:model`
+(`openai`, `anthropic`, `google`, `ollama`). Output ends with a line like
+`tokens: prompt=… (cached=…) completion=… cost=$…` (the dollar figure is an estimate; check your provider's usage page).
 
-
-### 🍎 Extract data
-#### Task: "Extract structured data about my followers and export it as a CSV."
-
-https://github.com/user-attachments/assets/485fd3ec-61b9-4afc-9e86-ee9b85acb592
-
-[Browser Use Cloud Docs ↗](https://docs.browser-use.com/cloud/quickstart)
-
-
-<br/>
-
-# Quickstart
-
-If you want to use Browser Use in your agent (Claude Code, Codex, Cursor, Hermes, OpenClaw, etc.), paste this prompt, and it sets everything up itself:
+## Command reference
 
 ```text
-Install or upgrade browser-use to the latest stable version with uv using Python 3.12, run `browser-use skill install` to register the skill, and connect it to my browser. If setup or connection fails, follow https://github.com/browser-use/browser-harness/blob/main/install.md.
+intelli run "<task>" [--model provider:model] [--headless] [--max-steps N]
+            [--vision on|off|auto] [--no-optimize-images] [--skip-unchanged]
+            [--save-skill NAME] [--use-vault] [--local-model ollama:MODEL] [--local-fallback-cloud]
+
+intelli skills   list | find "<query>" | show NAME | delete NAME | run NAME [--set KEY=VALUE ...]
+intelli vault    set DOMAIN NAME | list | delete DOMAIN NAME
+intelli calibrate --model provider:model
 ```
 
-Then tell your agent what you want done.
+### Choosing a vision mode
+- `on` (default): a screenshot every step. Best for layout-dependent pages (forms, charts, captchas).
+- `off`: page text only. Cheapest; fine for read-only text sites.
+- `auto`: a screenshot only when the agent asks for one. A middle path for mostly-text sites.
 
-<br/>
-
-# Python library: the easiest way to automate the web
-
-Want to automate the web at scale, from your own code, and with any LLM? Use the Python library:
-
-**1. Install Browser Use (Python >= 3.11):**
-
+### Using confidential data
 ```bash
-uv add browser-use
-# or: pip install browser-use
+intelli vault set example.com password          # prompts; the value is never taken from argv
+intelli run "log in to example.com and download the latest invoice" --use-vault --local-model ollama:llama3.1
 ```
+The model sees `<secret>password</secret>`. The value is decrypted and typed locally, only on `example.com`.
 
-**2. Add your LLM API key to `.env`**. Get one from [Browser Use Cloud](https://cloud.browser-use.com/new-api-key?utm_source=github&utm_medium=readme-quickstart-api-key), or bring your own provider key:
-
+### Record once, replay
 ```bash
-# .env
-BROWSER_USE_API_KEY=your-key
-# GOOGLE_API_KEY=your-key
-# ANTHROPIC_API_KEY=your-key
+intelli run "download last month's invoices as PDF" --save-skill invoices
+intelli skills find "invoices"
+intelli skills run invoices --set month=2026-10
 ```
+Skills live under your config directory (`~/.config/browseruse/local_skills/<name>/`: `history.json`, `skill.json`,
+and a readable `SKILL.md`).
 
-**3. Run your first agent:**
-
+### Python API
 ```python
-import asyncio
-
-from browser_use import Agent, ChatBrowserUse
-
-async def main():
-    agent = Agent(
-        task="Find the number of stars of the browser-use repo",
-        llm=ChatBrowserUse(model='openai/gpt-5.5'),
-        # llm=ChatBrowserUse(model='bu-2-0-mini-preview'),  # Browser Use's optimized model
-        # llm=ChatOpenAI(model='gpt-5.5'),
-        # llm=ChatAnthropic(model='claude-opus-4-8'),  # Sonnet also works well
-    )
-    history = await agent.run()
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-Check out the [library docs](https://docs.browser-use.com/open-source/introduction) and the [cloud docs](https://docs.cloud.browser-use.com?utm_source=github&utm_medium=readme-cloud-docs) for more!
-
-<br/>
-
-# Open Source vs Cloud
-
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="static/accuracy_by_model_light.png">
-  <source media="(prefers-color-scheme: dark)" srcset="static/accuracy_by_model_dark.png">
-  <img alt="BU Bench V1 - LLM Success Rates" src="static/accuracy_by_model_light.png" width="100%">
-</picture>
-
-We benchmark Browser Use across 100 real-world browser tasks. Full benchmark is open source: **[browser-use/benchmark](https://github.com/browser-use/benchmark)**.
-
-Browser Use is also **#1 on the [Odysseys leaderboard](https://odysseysbench.com/leaderboard)** with an 87.4% average, ahead of computer-use agents from OpenAI, Anthropic, Google, and Microsoft. Odysseys measures the agent's performance on 200 long-horizon web tasks.
-
-**Use the Open-Source Agent**
-- Free, and runs on your own machine
-- Deep code-level integration and control: pick your LLM, customize the agent's behavior
-- We recommend pairing it with our [cloud browsers](https://docs.browser-use.com/open-source/customize/browser/remote) for leading stealth, proxy rotation, and scaling
-
-**Use the [Fully-Hosted Cloud Agent](https://cloud.browser-use.com?utm_source=github&utm_medium=readme-hosted-agent) (recommended)**
-- Much more powerful agent for complex tasks (see plot above)
-- Easiest way to start and scale
-- Best stealth with proxy rotation and captcha solving
-- 1000+ integrations (Gmail, Slack, Notion, and more)
-- Persistent filesystem and memory
-- Rerunnable scripts fetch live data, even when sites change ([guide](https://docs.browser-use.com/cloud/agent/scripts))
-
-```sh
-curl -X POST https://api.browser-use.com/api/v4/runs \
-  -H "X-Browser-Use-API-Key: $BROWSER_USE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"task": "Your task"}'
-```
-
-<br/>
-
-## Integrations, hosting, custom tools, MCP, and more on our [Docs ↗](https://docs.browser-use.com)
-
-<br/>
-
-# FAQ
-
-<details>
-<summary><b>Should I use the CLI vs. the Python library?</b></summary>
-
-**Use the CLI** if you already have an agent (Claude Code, Codex, Cursor, Hermes, OpenClaw, etc.) that you want to complete browser tasks for you. The agent installs the skill once (see [Quickstart](#quickstart)) and can then control the browser. Examples:
-- "Upload this video to YouTube"
-- "Compare these three laptops and give me a table with prices"
-- "Fill in this job application with my resume"
-
-**Use the Python library** when you are building software that automates the web. Examples:
-- Run many tasks on a schedule or in parallel (scraping, monitoring, QA)
-- Embed a browser agent into your own product
-- Custom tools, custom system prompts, structured output, fine-grained browser control
-
-Rule of thumb: one-off tasks through an agent → CLI. Repeatable automation in code → Python library.
-</details>
-
-<details>
-<summary><b>What's the best model to use?</b></summary>
-
-We optimized **ChatBrowserUse()** specifically for browser automation tasks. On avg it completes tasks 3-5x faster than other models with SOTA accuracy.
-
-For pricing and other LLM providers, see our [supported models documentation](https://docs.browser-use.com/supported-models).
-</details>
-
-<details>
-<summary><b>Can I use Claude / GPT / Gemini through ChatBrowserUse?</b></summary>
-
-Yes. `ChatBrowserUse` accepts provider-prefixed model ids, so a single `BROWSER_USE_API_KEY` reaches all of them — no separate OpenAI/Anthropic/Google keys required:
-
-```python
-from browser_use import Agent, ChatBrowserUse
-
-llm = ChatBrowserUse(model='anthropic/claude-sonnet-4-6')  # or 'openai/gpt-5.5', 'google/gemini-3-pro'
-agent = Agent(task='...', llm=llm)
-```
-
-For the best speed and cost we still recommend the default `bu-*` models.
-</details>
-
-<details>
-<summary><b>Should I use the Browser Use system prompt with the open-source preview model?</b></summary>
-
-Yes. If you use `ChatBrowserUse(model='browser-use/bu-30b-a3b-preview')` with a normal `Agent(...)`, Browser Use still sends its default agent system prompt for you.
-
-You do **not** need to add a separate custom "Browser Use system message" just because you switched to the open-source preview model. Only use `extend_system_message` or `override_system_message` when you intentionally want to customize the default behavior for your task.
-
-If you want the best default speed/accuracy, we still recommend the newer hosted `bu-*` models. If you want the open-source preview model, the setup stays the same apart from the `model=` value.
-</details>
-
-<details>
-<summary><b>Can I use custom tools with the agent?</b></summary>
-
-Yes! You can add custom tools to extend the agent's capabilities:
-
-```python
-from browser_use import Tools
-
-tools = Tools()
-
-@tools.action(description='Description of what this tool does.')
-def custom_tool(param: str) -> str:
-    return f"Result: {param}"
+from browser_use import Agent, Browser
+from browser_use.llm.openai.chat import ChatOpenAI
 
 agent = Agent(
-    task="Your task",
-    llm=llm,
-    browser=browser,
-    tools=tools,
+    task="Find the cheapest laptop on example.com",
+    llm=ChatOpenAI(model="gpt-4o"),
+    browser=Browser(headless=True),
+    image_optimizer=True,        # token-aware screenshots
+    use_vision="auto",
+    record_skill="laptop-price", # saved when the run succeeds
 )
+history = await agent.run()
 ```
 
-</details>
+## What we measured (and what we haven't)
 
-<details>
-<summary><b>Can I use this for free?</b></summary>
+Honest numbers from real runs on `gpt-6-luna` and `gpt-4o` against news.ycombinator.com:
 
-Yes! Browser-Use is open source and free to use. You only need to choose an LLM provider (like OpenAI, Google, ChatBrowserUse, or run local models with Ollama).
-</details>
+- A one-step read-only task used **15.5k prompt tokens with `--vision off` vs 23.7k with a screenshot**: roughly a
+  third less, same answer. One run each, so treat the percentage as indicative.
+- Across a multi-step task, the optimizer-on run used about 20% fewer prompt tokens per step than optimizer-off, but the
+  two runs took different paths, so this is **not** a controlled result.
+- Screenshots appear to cost far more than the published OpenAI formula predicts on newer models (a rough, confounded
+  estimate of ~8k tokens at 1024×768). Run `intelli calibrate` for your model to get a measured figure.
 
-<details>
-<summary><b>Terms of Service</b></summary>
+Not yet measured: end-to-end savings over many tasks, task-success impact of `--vision auto`, accuracy of the privacy
+router's detection, and Anthropic prompt-cache hit rates. We'd welcome benchmarks.
 
-This open-source library is licensed under the MIT License. For Browser Use services & data policy, see our [Terms of Service](https://browser-use.com/legal/terms-of-service) and [Privacy Policy](https://browser-use.com/privacy/).
-</details>
+## Privacy model and limits
 
-<details>
-<summary><b>How do I handle authentication?</b></summary>
+- **Vault** protects values *at rest* (encrypted SQLite, owner-only file permissions). It does not defend against
+  malware running as your user, which can read the key file. Set `BU_VAULT_KEY` to supply your own key.
+- **Substitution** happens locally and only on domains you registered, but a page can still *display* private data.
+- **Routing** is heuristic. It catches vault domains and common PII patterns. Names, addresses, balances and similar
+  on a non-vault domain are **not** detected and will reach the cloud model.
+- **Local models** are usually weaker at the structured output the agent needs, so expect more failed steps.
+- If the local model errors on a sensitive step the router **refuses to send it to the cloud** unless you opt in with
+  `--local-fallback-cloud`.
+- Token cost for routed runs is attributed to the cloud model's pricing, so the printed estimate can be off.
 
-Check out our authentication examples:
-- [Using real browser profiles](https://github.com/browser-use/browser-use/blob/main/examples/browser/real_browser.py) - Reuse your existing Chrome profile with saved logins
-- If you want to use temporary accounts with inbox, choose AgentMail
-- To sync your auth profile with a remote browser, install `profile-use` for your platform from the [official releases](https://github.com/browser-use/profile-use-releases/releases/latest), then follow the [profile sync guide](https://github.com/browser-use/browser-harness/blob/main/interaction-skills/profile-sync.md).
+## Project status
 
-These examples show how to maintain sessions and handle authentication seamlessly.
-</details>
+Working end to end on macOS with OpenAI models (single- and multi-step tasks, skill recording). Unit tests cover the
+optimizer, calibration, vault, router, skills store and CLI (`tests/ci/`). The browser-driven CI tests need Chrome and
+network access and have not been run as a full suite in the environment where this was developed; run
+`uv run pytest -q tests/ci` on your machine before relying on it.
 
-<details>
-<summary><b>How do I solve CAPTCHAs?</b></summary>
+## Layout
 
-For CAPTCHA handling, you need better browser fingerprinting and proxies. Use [Browser Use Cloud](https://cloud.browser-use.com?utm_source=github&utm_medium=readme-faq-captcha) which provides stealth browsers designed to avoid detection and CAPTCHA challenges.
-</details>
-
-<details>
-<summary><b>How do I go into production?</b></summary>
-
-Chrome can consume a lot of memory, and running many agents in parallel can be tricky to manage.
-
-For production use cases, use our [Browser Use Cloud API](https://cloud.browser-use.com?utm_source=github&utm_medium=readme-faq-production) which handles:
-- Scalable browser infrastructure
-- Memory management
-- Proxy rotation
-- Stealth browser fingerprinting
-- High-performance parallel execution
-</details>
-
-<br/>
-
-## Citation
-
-If you use Browser Use in your research or project, please cite:
-
-```bibtex
-@software{browser_use2024,
-  author = {Müller, Magnus and Žunič, Gregor},
-  title = {Browser Use: Enable AI to control your browser},
-  year = {2024},
-  publisher = {GitHub},
-  url = {https://github.com/browser-use/browser-use}
-}
+```text
+browser_use/agent_cli.py                  CLI (intelli / bu-agent)
+browser_use/screenshots/optimizer.py      resize, encode, dedupe, token estimates
+browser_use/screenshots/calibration.py    measured per-model image cost
+browser_use/vault.py                      encrypted SQLite vault
+browser_use/llm/router.py                 local/cloud privacy router
+browser_use/skills/local.py               record / find / replay skills
 ```
 
-<br/>
+## Credits and license
 
-<div align="center">
-
-**Tell your computer what to do, and it gets it done.**
-
-<img src="https://github.com/user-attachments/assets/06fa3078-8461-4560-b434-445510c1766f" width="400"/>
-
-[![Twitter Follow](https://img.shields.io/twitter/follow/Magnus?style=social)](https://x.com/intent/user?screen_name=mamagnus00)
-&emsp;&emsp;&emsp;
-[![Twitter Follow](https://img.shields.io/twitter/follow/Gregor?style=social)](https://x.com/intent/user?screen_name=gregpr07)
-
-</div>
-
-<div align="center"> Made with ❤️ in Zurich and San Francisco </div>
+Intelli Browser OS is a derivative of [browser-use](https://github.com/browser-use/browser-use) by Gregor Zunic and
+contributors, released under the MIT License (see [LICENSE](LICENSE)). The browser control, DOM processing, agent loop
+and LLM integrations come from that project; the token-efficiency, vault, router, calibration and skills features are
+additions in this fork. "Browser Use" is the upstream project's name; this fork is independent and not affiliated with
+or endorsed by it.

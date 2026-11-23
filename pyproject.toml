@@ -1,6 +1,6 @@
 [project]
 name = "browser-use"
-description = "Make websites accessible for AI agents"
+description = "Intelli Browser OS: token-efficient, privacy-aware browser agent with replayable skills (built on browser-use)"
 authors = [{ name = "Gregor Zunic" }]
 version = "0.13.8"
 readme = "README.md"
@@ -107,6 +107,7 @@ browseruse = "browser_use.cli:main"  # Alias for browser-use
 bu = "browser_use.cli:main"  # Alias for browser-use
 browser = "browser_use.cli:main"  # Alias for browser-use
 bu-agent = "browser_use.agent_cli:main"  # Token-efficient agent runner + local skills
+intelli = "browser_use.agent_cli:main"  # Intelli Browser OS (alias of bu-agent)
 browser-use-tui = "browser_use.cli:browser_use_tui_main"  # Deprecated alias for browser-use
 
 [build-system]
