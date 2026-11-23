@@ -57,3 +57,34 @@ def test_newer_openai_models_get_no_sampling_params(monkeypatch):
 	for name in ['gpt-4o', 'gpt-4.1-mini']:
 		llm = resolve_llm(f'openai:{name}')
 		assert llm.temperature == 0.2 and llm.frequency_penalty == 0.3, name
+
+
+def test_vision_flag_resolution():
+	from browser_use.agent_cli import _resolve_vision
+
+	parse = build_parser().parse_args
+	assert _resolve_vision(parse(['run', 't'])) is True
+	assert _resolve_vision(parse(['run', 't', '--vision', 'off'])) is False
+	assert _resolve_vision(parse(['run', 't', '--vision', 'auto'])) == 'auto'
+	assert _resolve_vision(parse(['run', 't', '--no-vision'])) is False
+	with pytest.raises(SystemExit, match='not both'):
+		_resolve_vision(parse(['run', 't', '--vision', 'auto', '--no-vision']))
+
+
+def test_ollama_needs_no_api_key(monkeypatch):
+	for k in ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY']:
+		monkeypatch.delenv(k, raising=False)
+	assert resolve_llm('ollama:qwen2.5').model == 'qwen2.5'
+	assert resolve_llm('ollama').model == 'llama3.1'
+
+
+def test_vault_cli_never_prints_values(tmp_path, monkeypatch, capsys):
+	monkeypatch.setenv('BU_VAULT_DIR', str(tmp_path))
+	monkeypatch.setenv('MY_PW', 'p@ss-secret-123')
+	assert main(['vault', 'set', 'example.com', 'password', '--from-env', 'MY_PW']) == 0
+	assert main(['vault', 'list']) == 0
+	out = capsys.readouterr().out
+	assert 'example.com' in out and 'password' in out and 'p@ss-secret-123' not in out
+	assert main(['vault', 'delete', 'example.com', 'password']) == 0
+	with pytest.raises(SystemExit, match='not found'):
+		main(['vault', 'delete', 'example.com', 'password'])

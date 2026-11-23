@@ -23,6 +23,7 @@ from PIL import Image
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from browser_use.llm.messages import SupportedImageMediaType
+from browser_use.screenshots.calibration import ImageTokenCalibration
 
 Provider = Literal['anthropic', 'openai', 'google', 'other']
 
@@ -46,14 +47,26 @@ def detect_provider(model_name: str) -> Provider:
 	return 'other'
 
 
-def estimate_image_tokens(width: int, height: int, provider: Provider = 'other', detail: str = 'auto') -> int:
+def estimate_image_tokens(
+	width: int,
+	height: int,
+	provider: Provider = 'other',
+	detail: str = 'auto',
+	calibration: ImageTokenCalibration | None = None,
+) -> int:
 	"""Estimate input tokens for an image of the given size.
+
+	With a `calibration` (measured via `bu-agent calibrate`) that wins. The formulas below are published rules for
+	older model generations and can be far off for newer ones (a 1024x768 image was measured at ~8k tokens on
+	gpt-6-luna vs the 765 the OpenAI formula gives).
 
 	- anthropic: ~ width*height/750 (long edge is downscaled by the API above ~1568px)
 	- openai: 'low' = 85; otherwise fit in 2048 box, shortest side -> 768, then 170/512px-tile + 85
 	- google: 258 if both sides <= 384, otherwise 258 per 768px tile
 	"""
 	assert width > 0 and height > 0
+	if calibration is not None:
+		return calibration.estimate(width, height)
 	if provider == 'anthropic':
 		scale = min(1.0, 1568 / max(width, height))
 		return math.ceil(width * scale * height * scale / 750)
@@ -75,7 +88,7 @@ def estimate_image_tokens(width: int, height: int, provider: Provider = 'other',
 # (max_width, max_height) boxes where each provider's price curve is flat-ish for UI screenshots.
 _PROVIDER_BOX: dict[Provider, tuple[int, int]] = {
 	'anthropic': (1280, 800),  # ~1.4k tokens vs ~2k at 1568 long edge
-	'openai': (1024, 768),  # 2x2 tiles = 765 tokens
+	'openai': (768, 576),  # newer OpenAI models were measured charging ~per pixel; see calibration.py
 	'google': (1024, 768),  # 2x1 tiles = 516 tokens
 	'other': (1280, 800),
 }

@@ -2,6 +2,9 @@
 
 	bu-agent run "find the cheapest laptop on example.com" --save-skill laptop-price
 	bu-agent skills list | find "laptop" | run laptop-price --set email=a@b.c | delete laptop-price
+	bu-agent vault set example.com password            # prompts for the value; stored encrypted in SQLite
+	bu-agent run "log in to example.com" --use-vault --local-model ollama:llama3.1
+	bu-agent calibrate --model openai:gpt-6-luna         # measure real image token cost for this model
 
 (`browser-use` / `bu` is the separate Browser Harness CLI.)
 """
@@ -13,7 +16,7 @@ import asyncio
 import os
 import re
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
 	from browser_use.llm.base import BaseChatModel
@@ -24,6 +27,7 @@ _PROVIDERS = [
 	('OPENAI_API_KEY', 'openai', 'gpt-4o'),
 	('GOOGLE_API_KEY', 'google', 'gemini-2.5-flash'),
 ]
+_LOCAL_PROVIDERS = {'ollama': 'llama3.1'}  # no API key; needs a running Ollama server
 
 
 def _openai_rejects_sampling_params(model: str) -> bool:
@@ -41,10 +45,14 @@ def resolve_llm(model: str | None) -> BaseChatModel:
 				break
 		else:
 			raise SystemExit('No LLM configured: set ANTHROPIC_API_KEY, OPENAI_API_KEY or GOOGLE_API_KEY, or pass --model.')
-	default = {p: m for _, p, m in _PROVIDERS}.get(provider)
+	default = {p: m for _, p, m in _PROVIDERS}.get(provider) or _LOCAL_PROVIDERS.get(provider)
 	if default is None:
-		raise SystemExit(f'Unknown provider {provider!r}; use one of {[p for _, p, _ in _PROVIDERS]}')
+		raise SystemExit(f'Unknown provider {provider!r}; use one of {[p for _, p, _ in _PROVIDERS] + list(_LOCAL_PROVIDERS)}')
 	name = name or default
+	if provider == 'ollama':
+		from browser_use.llm.ollama.chat import ChatOllama
+
+		return ChatOllama(model=name)
 	if provider == 'anthropic':
 		from browser_use.llm.anthropic.chat import ChatAnthropic
 
@@ -73,7 +81,38 @@ def build_parser() -> argparse.ArgumentParser:
 	run.add_argument('--save-skill', metavar='NAME', help='record a successful run as a replayable skill')
 	run.add_argument('--no-optimize-images', action='store_true', help='send raw screenshots')
 	run.add_argument('--skip-unchanged', action='store_true', help='omit screenshots identical to the previous step')
-	run.add_argument('--no-vision', action='store_true', help='DOM text only (cheapest)')
+	run.add_argument('--no-vision', action='store_true', help='same as --vision off')
+	run.add_argument(
+		'--vision',
+		choices=['on', 'off', 'auto'],
+		default=None,
+		help='on: screenshot every step (default); off: DOM text only; auto: screenshot only when the agent asks for one',
+	)
+	run.add_argument(
+		'--use-vault', action='store_true', help='fill stored confidential values via placeholders (never sent to the LLM)'
+	)
+	run.add_argument(
+		'--local-model', metavar='ollama:MODEL', help='route steps that expose sensitive page content to this local model'
+	)
+	run.add_argument(
+		'--local-fallback-cloud',
+		action='store_true',
+		help='if the local model fails, send the step to the cloud anyway (off = fail closed)',
+	)
+
+	vault = sub.add_parser('vault', help='manage confidential values (encrypted SQLite)')
+	vsub = vault.add_subparsers(dest='vault_cmd', required=True)
+	vset = vsub.add_parser('set', help='store a value (prompted, never taken from argv)')
+	vset.add_argument('domain', help='where it may be used, e.g. example.com or https://*.example.com')
+	vset.add_argument('name', help='placeholder name the LLM will see, e.g. password')
+	vset.add_argument('--from-env', metavar='VAR', help='read the value from this environment variable instead of prompting')
+	vsub.add_parser('list', help='show domains and names (never values)')
+	vdel = vsub.add_parser('delete')
+	vdel.add_argument('domain')
+	vdel.add_argument('name')
+
+	cal = sub.add_parser('calibrate', help='measure real image token cost for a model (3 tiny API calls)')
+	cal.add_argument('--model', help='provider:model to measure')
 
 	skills = sub.add_parser('skills', help='manage local skills')
 	ssub = skills.add_subparsers(dest='skills_cmd', required=True)
@@ -110,11 +149,38 @@ def _log_usage(summary) -> None:
 	)
 
 
+def _resolve_vision(args: argparse.Namespace) -> bool | Literal['auto']:
+	if args.vision is not None and args.no_vision:
+		raise SystemExit('Use either --vision or --no-vision, not both.')
+	if args.no_vision:
+		return False
+	return {None: True, 'on': True, 'off': False, 'auto': 'auto'}[args.vision]
+
+
 async def _run_task(args: argparse.Namespace) -> int:
 	from browser_use import Agent, Browser
 	from browser_use.screenshots.optimizer import ImageOptimizerSettings
+	from browser_use.vault import Vault
+
+	use_vision = _resolve_vision(args)
+	sensitive_data: dict[str, str | dict[str, str]] | None = None
+	if args.use_vault:
+		sensitive_data = Vault().sensitive_data()
+		if not sensitive_data:
+			raise SystemExit('Vault is empty: add values with `bu-agent vault set DOMAIN NAME`.')
 
 	llm = resolve_llm(args.model)
+	router = None
+	if args.local_model:
+		from browser_use.llm.router import PrivacyRouterChat
+
+		router = PrivacyRouterChat(
+			cloud=llm,
+			local=resolve_llm(args.local_model),
+			sensitive_domains=list(sensitive_data or {}),
+			fallback_to_cloud=args.local_fallback_cloud,
+		)
+		llm = cast('BaseChatModel', router)  # structurally a chat model; the protocol's overloads defeat inference
 	optimizer = (
 		False
 		if args.no_optimize_images
@@ -124,13 +190,16 @@ async def _run_task(args: argparse.Namespace) -> int:
 		task=args.task,
 		llm=llm,
 		browser=Browser(headless=args.headless),
-		use_vision=not args.no_vision,
+		use_vision=use_vision,
+		sensitive_data=sensitive_data,
 		image_optimizer=optimizer,
 		record_skill=args.save_skill,
 		calculate_cost=True,
 	)
 	history = await agent.run(max_steps=args.max_steps)
 	print(history.final_result() or '(no result)')
+	if router is not None:
+		print(f'routing: cloud={router.calls["cloud"]} local={router.calls["local"]} calls', file=sys.stderr)
 	try:
 		_log_usage(await agent.token_cost_service.get_usage_summary())
 	except Exception:
@@ -174,10 +243,47 @@ def _skills_command(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _vault_command(args: argparse.Namespace) -> int:
+	import getpass
+
+	from browser_use.vault import Vault
+
+	vault = Vault()
+	if args.vault_cmd == 'set':
+		value = os.environ.get(args.from_env, '') if args.from_env else getpass.getpass(f'Value for {args.domain}/{args.name}: ')
+		if not value:
+			raise SystemExit('Empty value; nothing stored.')
+		vault.set(args.domain, args.name, value)
+		print(f'stored {args.domain}/{args.name}')
+	elif args.vault_cmd == 'list':
+		for e in vault.list():
+			print(f'{e.domain}\t{e.name}\t(updated {e.updated_at:%Y-%m-%d %H:%M})')
+	elif args.vault_cmd == 'delete':
+		if not vault.delete(args.domain, args.name):
+			raise SystemExit(f'{args.domain}/{args.name} not found')
+	return 0
+
+
+async def _calibrate(args: argparse.Namespace) -> int:
+	from browser_use.screenshots.calibration import calibrate_image_tokens, save_calibration
+
+	llm = resolve_llm(args.model)
+	cal = await calibrate_image_tokens(llm)
+	path = save_calibration(cal)
+	print(f'{cal.model}: ~{cal.base_tokens:.0f} + {cal.tokens_per_pixel * 1e6:.1f} tokens per megapixel (saved to {path})')
+	for w, h in [(768, 576), (1024, 768), (1280, 800), (1920, 1080)]:
+		print(f'  {w}x{h}: ~{cal.estimate(w, h)} tokens')
+	return 0
+
+
 def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
 	if args.cmd == 'run':
 		return asyncio.run(_run_task(args))
+	if args.cmd == 'vault':
+		return _vault_command(args)
+	if args.cmd == 'calibrate':
+		return asyncio.run(_calibrate(args))
 	if args.skills_cmd == 'run':
 		return asyncio.run(_replay(args))
 	return _skills_command(args)

@@ -72,3 +72,22 @@ bu-agent skills run laptop-price --set email=other@example.com
 
 `run` enables the image optimizer by default (`--no-optimize-images`, `--skip-unchanged`, `--no-vision` to tune).
 The separate `browser-use` / `bu` command is the Browser Harness CLI and is unchanged.
+
+## Confidential data, local model switching, vision modes
+
+```bash
+bu-agent vault set example.com password        # prompts; stored Fernet-encrypted in SQLite (0600 files)
+bu-agent vault list                            # names only, never values
+bu-agent run "log in to example.com" --use-vault --local-model ollama:llama3.1
+bu-agent run "read the front page" --vision auto   # screenshot only when the agent asks (on | off | auto)
+bu-agent calibrate --model openai:gpt-6-luna   # measure real image token cost; estimates then use it
+```
+
+- **Vault:** the cloud LLM sees `<secret>password</secret>` placeholders; real values are substituted locally, only
+  on matching domains. Protects values at rest, not against malware running as your user. Set `BU_VAULT_KEY` to
+  supply your own key instead of the `vault.key` file.
+- **`--local-model`:** a router sends a step to the local model (screenshots stripped) when the page host matches a
+  vault domain or the page text contains an email, Luhn-valid card number or SSN-shaped number; otherwise to the cloud
+  model. It fails closed: if the local model errors, the step is NOT sent to the cloud unless `--local-fallback-cloud`.
+  Detection is heuristic; private data the patterns miss (names, balances) on a non-vault domain still reaches the cloud.
+  Small local models are weaker at the structured output the agent needs; expect more failed steps.
